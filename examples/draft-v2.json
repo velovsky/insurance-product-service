@@ -1,0 +1,15 @@
+{
+  "product_code": "travel-basic",
+  "effective_from": "2027-01-01",
+  "change_note": "Claims ratio on world cover is up; raise the world multiplier.",
+  "tariff": {
+    "base_premium": { "currency": "EUR", "amount_minor": 4900 },
+    "factors": [
+      { "name": "age_band", "multipliers_bp": { "18-30": 11000, "31-64": 10000, "65+": 16000 } },
+      { "name": "destination", "multipliers_bp": { "europe": 10000, "world": 16000 } },
+      { "name": "trip_length", "multipliers_bp": { "week": 10000, "month": 18000 } }
+    ],
+    "minimum_premium": { "currency": "EUR", "amount_minor": 2500 },
+    "tax_rate_bp": 1900
+  }
+}

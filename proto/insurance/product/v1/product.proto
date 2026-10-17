@@ -1,0 +1,217 @@
+syntax = "proto3";
+
+package insurance.product.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// ProductService manages insurance products and their versioned tariffs.
+//
+// A version moves through DRAFT -> APPROVED -> PUBLISHED. Published versions
+// are immutable; a change is always a new version with a later effective date.
+// The acting user is read from the "x-actor" request metadata.
+service ProductService {
+  rpc CreateProduct(CreateProductRequest) returns (CreateProductResponse);
+  rpc GetProduct(GetProductRequest) returns (GetProductResponse);
+
+  // CreateDraftVersion proposes a new tariff. It can come from a person or an
+  // AI agent; either way it has no effect until it is approved and published.
+  rpc CreateDraftVersion(CreateDraftVersionRequest) returns (CreateDraftVersionResponse);
+
+  // ValidateDraft is a dry run: it checks the draft, diffs it against the
+  // version it would replace and prices sample risks under both tariffs.
+  rpc ValidateDraft(ValidateDraftRequest) returns (ValidateDraftResponse);
+
+  // ApproveVersion enforces the four-eyes rule: the approver must not be the author.
+  rpc ApproveVersion(ApproveVersionRequest) returns (ApproveVersionResponse);
+  rpc PublishVersion(PublishVersionRequest) returns (PublishVersionResponse);
+
+  // ListEvents reads the audit outbox in order, for consumers and for audits.
+  rpc ListEvents(ListEventsRequest) returns (ListEventsResponse);
+}
+
+// QuoteService prices a risk against the version that is in force on a date.
+service QuoteService {
+  rpc CreateQuote(CreateQuoteRequest) returns (CreateQuoteResponse);
+}
+
+enum VersionStatus {
+  VERSION_STATUS_UNSPECIFIED = 0;
+  VERSION_STATUS_DRAFT = 1;
+  VERSION_STATUS_APPROVED = 2;
+  VERSION_STATUS_PUBLISHED = 3;
+}
+
+message Money {
+  // ISO 4217 code, e.g. "EUR".
+  string currency = 1;
+  // Amount in minor units (cents) to avoid floating-point rounding.
+  int64 amount_minor = 2;
+}
+
+// RatingFactor multiplies the base premium depending on one risk attribute.
+message RatingFactor {
+  // Risk attribute name, e.g. "age_band".
+  string name = 1;
+  // Allowed option -> multiplier in basis points (10000 = 1.0x).
+  map<string, int64> multipliers_bp = 2;
+}
+
+message Tariff {
+  Money base_premium = 1;
+  repeated RatingFactor factors = 2;
+  Money minimum_premium = 3;
+  // Insurance premium tax in basis points (1900 = 19%).
+  int64 tax_rate_bp = 4;
+}
+
+message ProductVersion {
+  int32 number = 1;
+  VersionStatus status = 2;
+  // Calendar date (YYYY-MM-DD) from which the version is in force.
+  string effective_from = 3;
+  Tariff tariff = 4;
+  string change_note = 5;
+  string created_by = 6;
+  string approved_by = 7;
+  google.protobuf.Timestamp created_at = 8;
+  google.protobuf.Timestamp published_at = 9;
+}
+
+message Product {
+  // Stable business key, e.g. "travel-basic".
+  string code = 1;
+  string name = 2;
+  // Line of business, e.g. "travel".
+  string line = 3;
+  repeated ProductVersion versions = 4;
+}
+
+message CreateProductRequest {
+  string code = 1;
+  string name = 2;
+  string line = 3;
+}
+
+message CreateProductResponse {
+  Product product = 1;
+}
+
+message GetProductRequest {
+  string code = 1;
+}
+
+message GetProductResponse {
+  Product product = 1;
+}
+
+message CreateDraftVersionRequest {
+  string product_code = 1;
+  string effective_from = 2;
+  Tariff tariff = 3;
+  string change_note = 4;
+}
+
+message CreateDraftVersionResponse {
+  ProductVersion version = 1;
+}
+
+message Risk {
+  // Risk attribute -> selected option, e.g. {"age_band": "18-30"}.
+  map<string, string> attributes = 1;
+}
+
+message ValidationIssue {
+  string field = 1;
+  string message = 2;
+}
+
+message TariffChange {
+  // Dotted path of the changed value, e.g. "factors.age_band.65+".
+  string path = 1;
+  string before = 2;
+  string after = 3;
+}
+
+message SampleImpact {
+  Risk risk = 1;
+  // Unset when there is no version in force yet to compare against.
+  Money current_total = 2;
+  Money proposed_total = 3;
+  // Relative change in basis points (e.g. 1250 = +12.5%).
+  int64 change_bp = 4;
+}
+
+message ValidateDraftRequest {
+  string product_code = 1;
+  int32 version_number = 2;
+  repeated Risk sample_risks = 3;
+}
+
+message ValidateDraftResponse {
+  bool valid = 1;
+  repeated ValidationIssue issues = 2;
+  // Version the draft would replace on its effective date, 0 if none.
+  int32 compared_to_version = 3;
+  repeated TariffChange changes = 4;
+  repeated SampleImpact impacts = 5;
+}
+
+message ApproveVersionRequest {
+  string product_code = 1;
+  int32 version_number = 2;
+}
+
+message ApproveVersionResponse {
+  ProductVersion version = 1;
+}
+
+message PublishVersionRequest {
+  string product_code = 1;
+  int32 version_number = 2;
+}
+
+message PublishVersionResponse {
+  ProductVersion version = 1;
+}
+
+message Event {
+  int64 sequence = 1;
+  // e.g. "product.created", "version.published".
+  string type = 2;
+  string product_code = 3;
+  int32 version_number = 4;
+  string actor = 5;
+  google.protobuf.Timestamp occurred_at = 6;
+}
+
+message ListEventsRequest {
+  // Return events with a sequence greater than this value.
+  int64 after_sequence = 1;
+  int32 limit = 2;
+}
+
+message ListEventsResponse {
+  repeated Event events = 1;
+}
+
+message PremiumLine {
+  string label = 1;
+  Money amount = 2;
+}
+
+message CreateQuoteRequest {
+  string product_code = 1;
+  // Date (YYYY-MM-DD) whose version in force is used.
+  string as_of = 2;
+  Risk risk = 3;
+}
+
+message CreateQuoteResponse {
+  string product_code = 1;
+  // Version used for pricing, so every quote can be traced and reproduced.
+  int32 version_number = 2;
+  repeated PremiumLine lines = 3;
+  Money net_premium = 4;
+  Money tax = 5;
+  Money total = 6;
+}
