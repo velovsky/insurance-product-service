@@ -76,6 +76,40 @@ buf curl --protocol grpc --http2-prior-knowledge -H 'x-actor: alice' \
 
 Quotes dated before 2027-01-01 keep using version 1; later ones use version 2.
 
+## Use it from an AI agent (MCP)
+
+`cmd/mcp` serves the API as [Model Context Protocol](https://modelcontextprotocol.io) tools, so Claude or any MCP client can work with tariffs through typed tools instead of free text.
+
+| Tool | What the agent can do | Changes data? |
+|---|---|---|
+| `get_product` | Read a product and every tariff version | No |
+| `create_quote` | Price a risk with the version in force on a date | No |
+| `propose_tariff_change` | Create a **draft** version, with a required change note | Draft only |
+| `validate_draft` | Dry run: issues, diff and price impact for sample risks | No |
+| `list_events` | Read the audit log | No |
+
+**There is no approve or publish tool.** Agents propose; people decide. The boundary is enforced twice:
+
+1. The MCP server simply does not expose approval or publishing.
+2. The gRPC service enforces four-eyes, so even a client that bypasses the tools cannot approve its own draft. Every MCP call carries an `agent:` actor, so the audit log shows exactly which changes came from an agent.
+
+Feedback is written for an agent to act on. A dry run of an out-of-range proposal returns
+`{"field": "tariff.factors[1].multipliers_bp.world", "message": "multiplier 6 is outside the allowed range 0.1-5"}`,
+and a tool error names the rule that blocked it, for example
+`failed_precondition: version 2 is still draft; publish or replace it first`.
+
+### Connect Claude Code
+
+```bash
+make run                                   # terminal 1: gRPC server with the demo product
+# from the repository root:
+claude mcp add insurance -- go run ./cmd/mcp -addr localhost:50051 -actor agent:claude
+```
+
+Then ask, for example: *"World-cover claims are up. Propose raising the world multiplier to x1.6 from 1 January 2027 and show me the impact on a 65+ customer on a one-month trip."* With these tools the agent can read the product, propose version 2 and dry-run it (EUR 243.50 → EUR 268.69, +10.34%), and that is as far as it can go. A person approves and publishes it with the `buf curl` commands above.
+
+The whole loop is covered by `internal/agenttools/tools_test.go`, which runs the real gRPC service and a real MCP client in memory.
+
 ## Design
 
 ```
@@ -84,7 +118,9 @@ gen/                   generated Go code, checked in and verified in CI
 internal/domain        pure business rules: tariffs, pricing, versions, dry run, diff
 internal/store         in-memory repository + audit outbox
 internal/service       gRPC transport: requests, actor, error mapping
+internal/agenttools    MCP tools for AI agents on top of the gRPC API
 cmd/server             wiring, logging interceptor, health, reflection, graceful shutdown
+cmd/mcp                MCP server over stdio, a gRPC client acting as an agent
 ```
 
 - **The domain has no transport or storage imports.** Every rule is unit-tested without gRPC; the service tests then run the full lifecycle over a real gRPC connection (`bufconn`).
@@ -98,7 +134,7 @@ cmd/server             wiring, logging interceptor, health, reflection, graceful
 - PostgreSQL repository with a transactional outbox and a relay to a message broker
 - Server-streaming `WatchEvents` for consumers
 - Authentication (JWT / mTLS) and per-role permissions (`author`, `approver`, `publisher`)
-- An MCP server on top of the API, so agents propose tariffs through typed tools
+- Agent evals: a set of pricing requests with the expected proposal, run against real models
 - OpenTelemetry tracing
 
 ## Development

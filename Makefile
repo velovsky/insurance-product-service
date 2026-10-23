@@ -1,4 +1,4 @@
-.PHONY: generate lint test run build docker
+.PHONY: generate lint test run mcp build docker
 
 generate: ## Regenerate Go code from the protobuf API
 	buf generate
@@ -15,8 +15,12 @@ test: ## Run all tests with the race detector
 run: ## Start the server with a seeded demo product on :50051
 	go run ./cmd/server -seed
 
+mcp: ## Start the MCP server for AI agents (needs a running server)
+	go run ./cmd/mcp
+
 build:
 	go build -o bin/server ./cmd/server
+	go build -o bin/mcp ./cmd/mcp
 
 docker:
 	docker build -t insurance-product-service .
